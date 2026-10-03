@@ -13,40 +13,107 @@ local log = require("rest-nvim.logger")
 local curl_utils = require("rest-nvim.client.curl.utils")
 local utils = require("rest-nvim.utils")
 local config = require("rest-nvim.config")
+local async = vim.async or require("async")
+
+-- Progress reporting.
+-- noice.nvim does not provide a public progress API, but its `mini` view
+-- renders `lsp`/`progress` messages (the same view noice uses for LSP
+-- progress, similar to fidget.nvim). When noice is available and running, we
+-- create such messages directly and keep them visible while the request is
+-- running, following the same `opts.keep` + `Manager` pattern used by noice's
+-- own `lsp/docs.lua`. Otherwise falls back to `vim.notify` (which noice
+-- itself renders when installed).
 local progress
-local has_noice, noice = pcall(require, "noice")
-if has_noice and noice.api and noice.api.progress then
-    progress = {
-        create = function(opts)
-            local id = noice.api.progress.create(opts or {})
-            return {
-                report = function(_, msg)
-                    if type(msg) == "table" then
-                        noice.api.progress.update(id, msg)
-                    elseif msg then
-                        noice.api.progress.update(id, { message = msg })
-                    end
-                end,
-                finish = function(_)
-                    noice.api.progress.done(id)
-                end,
-                cancel = function(_)
-                    noice.api.progress.done(id)
-                end,
-            }
-        end,
+
+---@param msg string|{message:string}
+---@return string?
+local function msgstr(msg)
+    if type(msg) == "table" then
+        return msg.message
+    end
+    return msg
+end
+
+local ok, Message, Manager, Router, Format, Config = pcall(function()
+    return require("noice.message"), require("noice.message.manager"), require("noice.message.router"),
+        require("noice.text.format"), require("noice.config")
+end)
+
+---@param opts {title?: string, message?: string}
+---@return {report: fun(_, string|table), finish: fun(), cancel: fun()}
+local function create_noice(opts)
+    local running = true
+    local message = Message("lsp", "progress")
+    message.opts.progress = {
+        client = "rest.nvim",
+        title = opts.title or "Executing",
+        message = opts.message or "Executing request...",
     }
-else
-    progress = {
-        create = function()
-            return {
-                report = function() end,
-                finish = function() end,
-                cancel = function() end,
-            }
+    message.opts.keep = function()
+        return running
+    end
+    local function push(format)
+        format = format
+            or vim.tbl_get(Config, "options", "lsp", "progress", "format")
+            or "lsp_progress"
+        pcall(function()
+            Manager.add(Format.format(message, format))
+        end)
+    end
+    push()
+    return {
+        report = function(_, msg)
+            msg = msgstr(msg)
+            if msg then
+                message.opts.progress.message = msg
+                push()
+            end
+        end,
+        finish = function(_)
+            message.opts.progress.message = nil
+            running = false
+            push(vim.tbl_get(Config, "options", "lsp", "progress", "format_done") or "lsp_progress_done")
+            pcall(Router.update)
+            pcall(Manager.remove, message)
+        end,
+        cancel = function(_)
+            running = false
+            pcall(Manager.remove, message)
         end,
     }
 end
+
+progress = {
+    ---Create a progress message, displayed by noice's `mini` view when noice
+    ---is running, or through `vim.notify` otherwise
+    ---@param opts? {title?: string, message?: string}
+    ---@return {report: fun(_, string|table), finish: fun(), cancel: fun()}
+    create = function(opts)
+        opts = opts or {}
+        if ok and Config.is_running() then
+            local noice_ok, handle = pcall(create_noice, opts)
+            if noice_ok then
+                return handle
+            end
+            log.warn("failed to create noice progress message:", handle)
+        end
+        local title = opts.title or "rest.nvim"
+        local function notify(msg)
+            msg = msgstr(msg)
+            if msg then
+                vim.notify(msg, vim.log.levels.INFO, { title = title })
+            end
+        end
+        notify(opts.message)
+        return {
+            report = function(_, msg)
+                notify(msg)
+            end,
+            finish = function() end,
+            cancel = function() end,
+        }
+    end,
+}
 
 ---@type fun(cmd: string[], opts, vim.SystemOpts?): vim.SystemCompleted
 local system = async.wrap(3, vim.system)
@@ -397,40 +464,25 @@ end
 ---@param request rest.Request Request data to be passed to cURL
 ---@return rest.Response
 function curl.request(request)
-    local progress_handle = progress.handle.create({
+    local progress_handle = progress.create({
         title = "Executing",
         message = "Executing request...",
-        lsp_client = { name = "rest.nvim" },
     })
-    local future = nio.control.future()
     local args = builder.build(request)
-    curl.cli(args, function(sc)
-        if sc.code ~= 0 then
-            local message = "Something went wrong when making the request with cURL:\n"
-                .. curl_utils.curl_error(sc.code)
-            progress_handle:cancel()
-            log.error(message)
-            future.set_error(message)
-            return
-        end
-        vim.schedule(function()
-            progress_handle:report({
-                message = "Parsing response...",
-            })
-            local response = parser.parse_verbose(vim.split(sc.stderr, "\n"))
-            response.body = sc.stdout
-            future.set(response)
-            progress_handle:report({
-                message = "Success",
-            })
-            progress_handle:finish()
-        end)
-    end, {
-        -- TODO(boltless): parse by chunk from here
-        -- stdout = function (err, chunk) end,
-        -- stderr = function (err, chunk) end,
-    })
-    return future
+    local sc = curl.cli(args)
+    if sc.code ~= 0 then
+        local message = "Something went wrong when making the request with cURL:\n" .. curl_utils.curl_error(sc.code)
+        progress_handle:cancel()
+        log.error(message)
+        error(message)
+    end
+
+    progress_handle:report({ message = "Parsing response..." })
+    local response = parser.parse_verbose(vim.split(sc.stderr, "\n", { trimempty = true }))
+    response.body = sc.stdout
+    progress_handle:report({ message = "Success" })
+    progress_handle:finish()
+    return response
 end
 
 curl.builder = builder
