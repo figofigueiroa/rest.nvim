@@ -13,7 +13,40 @@ local log = require("rest-nvim.logger")
 local curl_utils = require("rest-nvim.client.curl.utils")
 local utils = require("rest-nvim.utils")
 local config = require("rest-nvim.config")
-local progress = require("fidget.progress")
+local progress
+local has_noice, noice = pcall(require, "noice")
+if has_noice and noice.api and noice.api.progress then
+    progress = {
+        create = function(opts)
+            local id = noice.api.progress.create(opts or {})
+            return {
+                report = function(_, msg)
+                    if type(msg) == "table" then
+                        noice.api.progress.update(id, msg)
+                    elseif msg then
+                        noice.api.progress.update(id, { message = msg })
+                    end
+                end,
+                finish = function(_)
+                    noice.api.progress.done(id)
+                end,
+                cancel = function(_)
+                    noice.api.progress.done(id)
+                end,
+            }
+        end,
+    }
+else
+    progress = {
+        create = function()
+            return {
+                report = function() end,
+                finish = function() end,
+                cancel = function() end,
+            }
+        end,
+    }
+end
 
 ---@type fun(cmd: string[], opts, vim.SystemOpts?): vim.SystemCompleted
 local system = async.wrap(3, vim.system)

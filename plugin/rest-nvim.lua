@@ -16,10 +16,10 @@ local rest_nvim_deps = {}
 
 -- Locate dependencies
 local dependencies = {
-    ["fidget.nvim"] = "rest.nvim will be completely unable to show request progress messages",
+    ["noice.nvim"] = "rest.nvim will be completely unable to show request progress messages",
 }
 for dep, err in pairs(dependencies) do
-    local found_dep2 = pcall(require, "fidget")
+    local found_dep2 = pcall(require, "noice")
 
     rest_nvim_deps[dep] = {
         found = found_dep2,
@@ -35,14 +35,6 @@ for dep, err in pairs(dependencies) do
 end
 vim.g.rest_nvim_deps = rest_nvim_deps
 
-require("rest-nvim.autocmds").setup()
-require("rest-nvim.commands").setup()
-vim.treesitter.language.register("http", "rest_nvim_result")
-
--- setup highlight groups
-require("rest-nvim.ui.highlights")
-
-vim.g.loaded_rest_nvim = true
 require("rest-nvim.autocmds").setup()
 require("rest-nvim.commands").setup()
 vim.treesitter.language.register("http", "rest_nvim_result")
