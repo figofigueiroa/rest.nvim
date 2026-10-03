@@ -3,6 +3,7 @@
 local dotenv = require("rest-nvim.dotenv")
 local config = require("rest-nvim.config")
 local logger = require("rest-nvim.logger")
+local variaveis = require("rest-nvim.variaveis")
 local M = {}
 
 ---@class rest.Context
@@ -104,7 +105,8 @@ end
 ---resolves variable
 ---1. variables from pre-request scripts (local to each requests)
 ---2. in-place variables (local to each .http files)
----3. selected dotenv file (local to each .http files)
+---3. variables selected from `variaveis.json` (see `:Rest vars select`)
+---4. selected dotenv file (local to each .http files)
 ---returns empty string if variable is not set
 ---@param key string
 ---@return string value
@@ -117,7 +119,7 @@ function Context:resolve(key)
     end
     -- find from local variable table or vim.env
     logger.debug("resolving variable:", key)
-    return self.lv[key] or self.vars[key] or vim.env[key] or ""
+    return self.lv[key] or variaveis.selected[key] or self.vars[key] or vim.env[key] or ""
 end
 
 M.Context = Context

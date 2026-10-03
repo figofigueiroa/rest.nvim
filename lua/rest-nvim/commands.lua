@@ -29,6 +29,18 @@
 ---                                 file. `path` should be relative to Neovim's
 ---                                 cwd.
 ---
+--- vars select                     Select a value for an environment variable
+---                                 from `variaveis.json` (in Neovim's config
+---                                 directory). Pick the variable via
+---                                 |vim.ui.select()| then the value via the
+---                                 snacks.nvim picker. Selected values are
+---                                 persisted between sessions and win over
+---                                 dotenv files and |vim.env| when resolving
+---                                 variables.
+---
+--- vars list                        Show the currently selected environment
+---                                 variables in a notification.
+---
 --- curl yank {name?}               (experimental) Copy curl command equivelant
 ---                                 to HTTP request with given `name`. If no name
 ---                                 is provided, copy from request under the
@@ -227,6 +239,31 @@ local rest_command_tbl = {
             end, actions)
 
             return match
+        end,
+    },
+    vars = {
+        impl = function(args, _)
+            local variaveis = require("rest-nvim.variaveis")
+            if args[1] == "select" then
+                variaveis.select()
+            elseif args[1] == "list" then
+                variaveis.list()
+            else
+                vim.notify(
+                    "Invalid action '" .. args[1] .. "' provided to 'vars' command",
+                    vim.log.levels.ERROR,
+                    { title = "rest.nvim" }
+                )
+            end
+        end,
+        complete = function(args)
+            local actions = { "select", "list" }
+            return vim.tbl_filter(function(action)
+                if string.find(action, "^" .. args) then
+                    return action
+                    ---@diagnostic disable-next-line missing-return
+                end
+            end, actions)
         end,
     },
     -- TODO(boltless): complete curl command
