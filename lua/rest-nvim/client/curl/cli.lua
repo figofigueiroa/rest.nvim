@@ -13,8 +13,7 @@ local log = require("rest-nvim.logger")
 local curl_utils = require("rest-nvim.client.curl.utils")
 local utils = require("rest-nvim.utils")
 local config = require("rest-nvim.config")
-local notify = require("mini.notify")
-local async = vim.async or require("async")
+local progress = require("fidget.progress")
 
 ---@type fun(cmd: string[], opts, vim.SystemOpts?): vim.SystemCompleted
 local system = async.wrap(3, vim.system)
@@ -365,21 +364,40 @@ end
 ---@param request rest.Request Request data to be passed to cURL
 ---@return rest.Response
 function curl.request(request)
-    local notification = notify.add("rest.nvim: Executing request...")
+    local progress_handle = progress.handle.create({
+        title = "Executing",
+        message = "Executing request...",
+        lsp_client = { name = "rest.nvim" },
+    })
+    local future = nio.control.future()
     local args = builder.build(request)
-    local sc = curl.cli(args)
-    if sc.code ~= 0 then
-        local message = "Something went wrong when making the request with cURL:\n" .. curl_utils.curl_error(sc.code)
-        notify.remove(notification)
-        log.error(message)
-        error(message)
-    end
-
-    notify.update(notification, { msg = "rest.nvim: Parsing response..." })
-    local response = parser.parse_verbose(vim.split(sc.stderr, "\n", { trimempty = true }))
-    response.body = sc.stdout
-    notify.remove(notification)
-    return response
+    curl.cli(args, function(sc)
+        if sc.code ~= 0 then
+            local message = "Something went wrong when making the request with cURL:\n"
+                .. curl_utils.curl_error(sc.code)
+            progress_handle:cancel()
+            log.error(message)
+            future.set_error(message)
+            return
+        end
+        vim.schedule(function()
+            progress_handle:report({
+                message = "Parsing response...",
+            })
+            local response = parser.parse_verbose(vim.split(sc.stderr, "\n"))
+            response.body = sc.stdout
+            future.set(response)
+            progress_handle:report({
+                message = "Success",
+            })
+            progress_handle:finish()
+        end)
+    end, {
+        -- TODO(boltless): parse by chunk from here
+        -- stdout = function (err, chunk) end,
+        -- stderr = function (err, chunk) end,
+    })
+    return future
 end
 
 curl.builder = builder
